@@ -1,0 +1,2 @@
+[01-Jun-2025 14:44:53 UTC] PHP Fatal error:  Trait "Tests\Feature\RefreshDatabase" not found in /home/bettermo/public_html/laravel/tests/Feature/OrderFulfillmentTest.php on line 9
+[01-Jun-2025 14:46:42 UTC] PHP Fatal error:  Trait "Tests\Feature\RefreshDatabase" not found in /home/bettermo/public_html/laravel/tests/Feature/OrderFulfillmentTest.php on line 9
