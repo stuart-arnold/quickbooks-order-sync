@@ -119,6 +119,7 @@ class CoreSeeder extends Seeder
                 'postcode' => 'S1 2AB',
                 'country' => 'UK',
                 'order_comments' => null,
+                'delivery_method' => 'Post',
             ],
             [
                 'customer_name' => 'Bob Smith',
@@ -130,6 +131,7 @@ class CoreSeeder extends Seeder
                 'postcode' => 'M1 3CD',
                 'country' => 'UK',
                 'order_comments' => 'Urgent delivery, please.',
+                'delivery_method' => 'Post',
             ],
             [
                 'customer_name' => 'Charlie Rose',
@@ -141,6 +143,7 @@ class CoreSeeder extends Seeder
                 'postcode' => '69001',
                 'country' => 'France',
                 'order_comments' => null,
+                'delivery_method' => 'Courier',
             ],
             [
                 'customer_name' => 'Diana Prince',
@@ -152,6 +155,7 @@ class CoreSeeder extends Seeder
                 'postcode' => 'BT15 4DF',
                 'country' => 'Northern Ireland',
                 'order_comments' => null,
+                'delivery_method' => 'Post',
             ],
             [
                 'customer_name' => 'Edward King',
@@ -163,6 +167,7 @@ class CoreSeeder extends Seeder
                 'postcode' => 'NG1 5GH',
                 'country' => 'UK',
                 'order_comments' => 'Contact before delivery.',
+                'delivery_method' => 'Courier',
             ]
         ];
 

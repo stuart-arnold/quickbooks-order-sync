@@ -10,31 +10,67 @@ use Illuminate\Support\Facades\DB;
 class OrderService
 {
 
-    /**
-     * Attempts to assign the best supplier(s) for an order.
-     * - Tries to send whole order from 1 supplier (lowest total cost with stock).
-     * - Falls back to per-product cheapest supplier if needed.
-     */
+    protected int $preferredSupplierId;
+
+    public function __construct(int $preferredSupplierId = 1)
+    {
+        $this->preferredSupplierId = $preferredSupplierId;
+    }
+
+    /*
+    - Reject invalid orders early
+    - Build per-product fulfillment options
+    - Group by supplier
+    - Try to fulfill full order from one supplier (preferred if close)
+    - If not, fall back to split
+    - If neither works, return null or error
+    */
     public function selectSupplierForOrder(Order $order): ?array
     {
+        // Reject immediately if the order has customer comments. These require manual handling.
+        if (!empty($order->order_comments)) {
+            return [
+                'status' => 'unfulfillable',
+                'reason' => 'Order has comments and requires manual review',
+            ];
+        }       
+
+        // This will collect possible fulfillment plans per product line.
         $productPlans = [];
 
+        // Loop through each product in the order.
         foreach ($order->items as $item) {
+            // Load the product.
             $product = $item->product;
             $orderQuantity = $item->quantity;
 
+            // Construct a unique $lineKey for tracking this line, based on IDs.
             $lineKey = $item->id ?? ($product->id . '|' . $item->bike_id . '|' . $item->fitment_id);
 
+            // Set human-readable bike/fitment names.
             $bikeName = $item?->bike_name ?? 'Unknown Bike';
             $fitmentName = $item?->fitment_name ?? 'Unknown Fitment';
 
+            // Fetch all supplier parts for the product.
             $parts = SupplierPartNumber::where('product_id', $product->id)->get();
 
+            // If none exist, we cannot fulfill this product -> whole order is unfulfillable.
+            if ($parts->isEmpty()) {
+                return [
+                    'status' => 'unfulfillable',
+                    'reason' => "Product '{$product->name}' has no supplier parts",
+                ];
+            }
+
+            // Group all parts by their supplier.
             $grouped = $parts->groupBy(fn($part) => $part->supplier_id);
 
+            // Initialize a collection to track which suppliers can fulfill this product.
             $fulfilledBy = [];
 
             foreach ($grouped as $supplierId => $partsForSupplier) {
+                
+                // Check if they have sufficient stock for every required part for this product.
                 $supplier = Supplier::find($supplierId);
                 $can_supply = true;
 
@@ -47,8 +83,10 @@ class OrderService
                     }
                 }
 
+                // If any part is understocked, skip this supplier.
                 if (!$can_supply) continue;
 
+                // If a supplier can supply all required parts, calculate total cost and part breakdown.
                 $partsUsed = [];
                 $totalCost = 0;
 
@@ -73,21 +111,31 @@ class OrderService
                     $totalCost += $costTotal;
                 }
 
+                // Store this in the $fulfilledBy array.
                 $fulfilledBy[$supplierId] = [
                     'total_cost' => $totalCost,
                     'parts' => $partsUsed,
                 ];
             }
 
+            // If no supplier can fulfill this product -> reject the order.
             if (empty($fulfilledBy)) {
-                return null;
+                return [
+                    'status' => 'unfulfillable',
+                    'reason' => "No supplier can fully supply all required parts for product '{$product->name}' (ID: {$product->id})",
+                    'product_id' => $product->id,
+                    'product_name' => $product->name,
+                ];
             }
 
+            // Otherwise, add all valid supplier options for this product to the master list.
             $productPlans[$lineKey] = $fulfilledBy;
         }
 
         $preferredSupplierId = 1;
+        $hiLevelId = Supplier::where('name', 'Hi-Level')->value('id');
 
+        // Transform the $productPlans into a list of suppliers -> products they can fulfill.
         $eligibleSuppliers = [];
         foreach ($productPlans as $lineKey => $suppliers) {
             foreach ($suppliers as $supplierId => $data) {
@@ -95,6 +143,7 @@ class OrderService
             }
         }
 
+        // For each supplier, if they can fulfill every product line, they are a full candidate.
         $fullOrderCandidates = [];
         foreach ($eligibleSuppliers as $supplierId => $linesFulfilled) {
             if (count($linesFulfilled) === count($productPlans)) {
@@ -108,6 +157,7 @@ class OrderService
             }
         }
 
+        // Pick best full-order supplier
         if (!empty($fullOrderCandidates)) {
             $cheapest = null;
             $preferred = null;
@@ -122,16 +172,30 @@ class OrderService
                 }
             }
 
+            // Choose the cheapest supplier, or the preferred one if it’s within £1 of the cheapest.
             $best = ($preferred && $preferred['total_cost'] <= $cheapest['total_cost'] + 1.00) ? $preferred : $cheapest;
             $reason = ($best === $preferred)
                 ? 'Preferred supplier selected (within £1.00 of cheapest)'
                 : 'Cheapest supplier selected';
 
+
+            // Build and return the full fulfillment structure with all part and customer info.
             $supplier = Supplier::find($best['supplier_id']);
+            
+            // Check if Hi-Level would be selected but the address is invalid
+            if ($supplier->id === $hiLevelId && $this->failsHiLevelAddressCheck($order)) {
+                return [
+                    'status' => 'unfulfillable',
+                    'reason' => 'Hi-Level cannot fulfill due to address line length limits',
+                ];
+            }
+
             $orderParts = collect($best['products'])->pluck('parts')->flatten(1)->all();
 
             return [
-                'mode' => 'full',
+                'order_id' => $order->id,
+                'status' => 'fulfilled',
+                'delivery_method' => $order->delivery_method,
                 'suppliers' => [
                     $supplier->name => [
                         'total_cost' => $best['total_cost'],
@@ -155,9 +219,11 @@ class OrderService
             ];
         }
 
+        // Handle partial (split) orders
         $splitOrder = [];
         $splitCost = [];
 
+        // For each product line, pick the cheapest supplier and allocate parts.
         foreach ($productPlans as $lineKey => $options) {
             uasort($options, fn($a, $b) => $a['total_cost'] <=> $b['total_cost']);
             $bestSupplierId = array_key_first($options);
@@ -168,34 +234,56 @@ class OrderService
             $splitCost[$bestSupplierId] = ($splitCost[$bestSupplierId] ?? 0) + $options[$bestSupplierId]['total_cost'];
         }
 
+        // Build the return structure per supplier for the split fulfillment.
         $result = ['suppliers' => []];
         foreach ($splitOrder as $supplierId => $parts) {
             $supplier = Supplier::find($supplierId);
+
+            // Check if Hi-Level would be selected but the address is invalid
+            if ($supplier->id === $hiLevelId && $this->failsHiLevelAddressCheck($order)) {
+                return [
+                    'status' => 'unfulfillable',
+                    'reason' => 'Hi-Level cannot fulfill due to address line length limits',
+                ];
+            }
+
             $result['suppliers'][$supplier->name] = [
                 'total_cost' => $splitCost[$supplierId],
                 'order_parts' => $parts,
             ];
         }
 
+        // If somehow no parts could be allocated, return an error (should rarely hit).
         if (empty($result['suppliers'])) {
-            return ['error' => 'No supplier(s) can fulfill any part of this order.'];
+            return [
+                'status' => 'unfulfillable',
+                'reason' => 'No supplier(s) can fulfill any part of this order.',
+            ];
         }
-
-        $result['mode'] = 'split';
-        $result['customer'] = [
-            'name' => $order->customer_name,
-            'email' => $order->customer_email,
-            'phone' => $order->customer_phone,
-            'address' => [
-                'line_1' => $order->address_line_1,
-                'line_2' => $order->address_line_2,
-                'city'   => $order->city,
-                'postcode' => $order->postcode,
-                'country' => $order->country,
+        
+        return [
+            'order_id' => $order->id,
+            'status' => 'split',
+            'delivery_method' => $order->delivery_method,
+            'suppliers' => $result['suppliers'],
+            'customer' => [
+                'name' => $order->customer_name,
+                'email' => $order->customer_email,
+                'phone' => $order->customer_phone,
+                'address' => [
+                    'line_1' => $order->address_line_1,
+                    'line_2' => $order->address_line_2,
+                    'city'   => $order->city,
+                    'postcode' => $order->postcode,
+                    'country' => $order->country,
+                ],
+                'comments' => $order->order_comments,
             ],
-            'comments' => $order->order_comments,
         ];
+    }
 
-        return $result;
+    private function failsHiLevelAddressCheck(Order $order): bool
+    {
+        return strlen($order->address_line_1) > 30 || strlen($order->address_line_2) > 30 || strlen($order->city) > 30;
     }
 }

@@ -10,12 +10,12 @@ class OrderItem extends Model
         'product_id',
         'bike_id',
         'fitment_id',
+        'bike_name',
+        'fitment_name',
         'quantity',
         'product_name',
         'product_price',
         'product_sku',
-        'bike_name',
-        'fitment_name',
     ];
 
     public function order()

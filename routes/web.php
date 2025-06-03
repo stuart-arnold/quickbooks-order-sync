@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\QuickBooksController;
+use App\Http\Controllers\OrderFulfillmentController;
 
 // Default Route
 Route::get('/', function () {
@@ -13,5 +14,6 @@ Route::get('/quickbooks/redirect', [QuickBooksController::class, 'redirectToQuic
 Route::get('/quickbooks/callback', [QuickBooksController::class, 'handleQuickBooksCallback']);
 Route::get('/quickbooks/{realmId}/refresh-token', [QuickBooksController::class, 'refreshQuickBooksAccessToken']);
 
-Route::get('/orders/{orderId}/process', [OrderController::class, 'processOrder']);
+Route::get('/admin/fulfillment', [OrderFulfillmentController::class, 'index'])->name('fulfillment.index');
+Route::post('/admin/fulfillment/run', [OrderFulfillmentController::class, 'run'])->name('fulfillment.run');
 

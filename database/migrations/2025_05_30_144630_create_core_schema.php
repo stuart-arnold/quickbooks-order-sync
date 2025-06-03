@@ -80,6 +80,8 @@ return new class extends Migration {
         
             // New order comment field
             $table->text('order_comments')->nullable();
+
+            $table->string('delivery_method')->nullable();
         
             $table->timestamps();
         });
