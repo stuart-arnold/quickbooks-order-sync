@@ -17,14 +17,16 @@ class OrderService
         $this->preferredSupplierId = $preferredSupplierId;
     }
 
-    /*
-    - Reject invalid orders early
-    - Build per-product fulfillment options
-    - Group by supplier
-    - Try to fulfill full order from one supplier (preferred if close)
-    - If not, fall back to split
-    - If neither works, return null or error
-    */
+    /**
+     * Determines the best way to fulfill an order based on supplier availability and costs.
+     *
+     * Logic overview:
+     * - Reject orders early if they are invalid (e.g. contain comments).
+     * - For each product, build a list of suppliers that can fully fulfill the item.
+     * - Attempt to fulfill the entire order from a single supplier (preferably the cheapest or preferred).
+     * - If full fulfillment isn't possible, allow splitting across suppliers.
+     * - If no fulfillment option exists, return an error with a clear reason.
+     */
     public function selectSupplierForOrder(Order $order): ?array
     {
         // Reject immediately if the order has customer comments. These require manual handling.
